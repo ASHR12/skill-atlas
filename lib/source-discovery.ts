@@ -15,19 +15,27 @@ const SOURCE_TYPES: SourceType[] = [
 const SOURCE_QUERIES: Record<SourceType, string[]> = {
   docs: [
     "{topic} official documentation",
-    "{topic} api reference",
+    "{topic} api reference docs",
+    "{topic} developer guide documentation",
+    "{topic} getting started guide",
   ],
   github: [
-    "{topic} github discussions",
+    "{topic} site:github.com",
     "{topic} github issues",
+    "{topic} github discussions",
+    "{topic} github repository",
   ],
   stackoverflow: [
-    "{topic} stack overflow",
-    "{topic} stackoverflow common error",
+    "{topic} site:stackoverflow.com",
+    "{topic} stackoverflow how to",
+    "{topic} stackoverflow error",
+    "{topic} stackoverflow best practice",
   ],
   blog: [
     "{topic} tutorial blog",
     "{topic} best practices guide",
+    "{topic} tutorial dev.to OR medium.com OR hashnode",
+    "{topic} deep dive explained",
   ],
 };
 
@@ -85,9 +93,19 @@ function isDocsResult(result: SearchResult): boolean {
     "/docs",
     "/api",
     "/reference",
+    "/manual",
+    "/guide",
+    "/learn",
+    "/getting-started",
+    "wiki",
   ];
 
   if (hostname.includes("github.com") || hostname.includes("stackoverflow.com")) {
+    return false;
+  }
+
+  // Exclude known blog domains from docs
+  if (hasAny(hostname, KNOWN_BLOG_DOMAINS) || hostname.includes("blog.")) {
     return false;
   }
 
@@ -100,8 +118,7 @@ function isGithubResult(result: SearchResult): boolean {
 
 function isStackOverflowResult(result: SearchResult): boolean {
   const hostname = result.hostname.toLowerCase();
-  const url = result.url.toLowerCase();
-  return hostname.includes("stackoverflow.com") && url.includes("/questions/");
+  return hostname.includes("stackoverflow.com") || hostname.includes("stackexchange.com");
 }
 
 function isBlogResult(result: SearchResult): boolean {
@@ -112,15 +129,14 @@ function isBlogResult(result: SearchResult): boolean {
     return false;
   }
 
-  if (isDocsResult(result)) {
-    return false;
-  }
-
   return (
     hasAny(hostname, KNOWN_BLOG_DOMAINS) ||
     hostname.includes("blog.") ||
     url.includes("/blog/") ||
-    url.includes("/tutorial")
+    url.includes("/tutorial") ||
+    url.includes("/guide") ||
+    url.includes("/post/") ||
+    url.includes("/article")
   );
 }
 
@@ -172,55 +188,43 @@ function scoreResult(
 
 function defaultFallbacks(topic: string, type: SourceType): DiscoveredSource[] {
   const encoded = encodeURIComponent(topic);
+  const make = (url: string, title: string, i: number): DiscoveredSource => ({
+    id: createSourceId(type, url, i),
+    type,
+    title,
+    url,
+    reason: `Fallback ${type} source for ${topic}.`,
+    query: `${topic} ${type}`,
+  });
 
   if (type === "docs") {
     return [
-      {
-        id: createSourceId(type, `https://duckduckgo.com/?q=${encoded}+official+docs`, 0),
-        type,
-        title: `${topic} documentation search`,
-        url: `https://duckduckgo.com/?q=${encoded}+official+docs`,
-        reason: "Fallback search page for official documentation.",
-        query: `${topic} official docs`,
-      },
+      make(`https://www.google.com/search?q=${encoded}+official+documentation`, `${topic} documentation search`, 0),
+      make(`https://www.google.com/search?q=${encoded}+api+reference+docs`, `${topic} API reference`, 1),
+      make(`https://www.google.com/search?q=${encoded}+getting+started+guide`, `${topic} getting started`, 2),
     ];
   }
 
   if (type === "github") {
     return [
-      {
-        id: createSourceId(type, `https://github.com/search?q=${encoded}&type=discussions`, 0),
-        type,
-        title: `${topic} GitHub discussions`,
-        url: `https://github.com/search?q=${encoded}&type=discussions`,
-        reason: "Fallback GitHub discovery page.",
-        query: `${topic} github discussions`,
-      },
+      make(`https://github.com/search?q=${encoded}&type=repositories`, `${topic} GitHub repos`, 0),
+      make(`https://github.com/search?q=${encoded}&type=discussions`, `${topic} GitHub discussions`, 1),
+      make(`https://github.com/search?q=${encoded}&type=issues`, `${topic} GitHub issues`, 2),
     ];
   }
 
   if (type === "stackoverflow") {
     return [
-      {
-        id: createSourceId(type, `https://stackoverflow.com/search?q=${encoded}`, 0),
-        type,
-        title: `${topic} Stack Overflow search`,
-        url: `https://stackoverflow.com/search?q=${encoded}`,
-        reason: "Fallback Stack Overflow discovery page.",
-        query: `${topic} stack overflow`,
-      },
+      make(`https://stackoverflow.com/search?q=${encoded}`, `${topic} Stack Overflow search`, 0),
+      make(`https://stackoverflow.com/search?q=${encoded}+error`, `${topic} SO common errors`, 1),
+      make(`https://stackoverflow.com/search?q=${encoded}+best+practice`, `${topic} SO best practices`, 2),
     ];
   }
 
   return [
-    {
-      id: createSourceId(type, `https://duckduckgo.com/?q=${encoded}+blog+tutorial`, 0),
-      type,
-      title: `${topic} technical blog search`,
-      url: `https://duckduckgo.com/?q=${encoded}+blog+tutorial`,
-      reason: "Fallback search page for blog tutorials.",
-      query: `${topic} tutorial blog`,
-    },
+    make(`https://dev.to/search?q=${encoded}`, `${topic} dev.to articles`, 0),
+    make(`https://medium.com/search?q=${encoded}`, `${topic} Medium articles`, 1),
+    make(`https://www.google.com/search?q=${encoded}+tutorial+blog`, `${topic} tutorial search`, 2),
   ];
 }
 
@@ -248,9 +252,8 @@ async function discoverByType(
         .filter((result) => matchesType(result, type))
         .map((result) => ({
           result,
-          score: scoreResult(result, type, topicTokens),
+          score: scoreResult(result, type, topicTokens) + 1, // base score so type-matched results always qualify
         }))
-        .filter((entry) => entry.score > 0)
         .sort((left, right) => right.score - left.score);
 
       for (const entry of ranked) {
